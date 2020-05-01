@@ -13,7 +13,6 @@ using namespace std;
 int DIMENTION = 0;
 int NUM_STATIONS = 0;
 int NUM_CUSTOMERS = 0;
-// int NUM_SAVING_DISTANCES = 0;
 int NUM_VEHICLES = 0;
 
 double MAX_CAPACITY_VH = 0.0;
@@ -22,7 +21,6 @@ double ENG_CONSUMTION = 0.0;
 double OPTIMAL_VALUE = 0.0;
 
 double **Distances;
-// double Saving_Distances[1000][3];
 double Demands[2000];
 double **Coords;
 
@@ -34,18 +32,21 @@ double **B_CAP;
 double **F_ENERGY;
 double **B_ENERGY;
 
+// -- data in GA process --
 int **Routes;
+int **Route_In_Pool;
 bool **Through_Stations;
+bool **Through_Stations_In_Pool;
 double *Fitnesses;
 double Alpha, Beta, H;
 double Roulette_Wheel_Arr[1000];
-int Parent_Pool[500];
+int Parent_Pool[700];
 bool Is_In_Pool[1000];
 bool Deprecate_In_Next_Gen[1000];
 
 int *Temp_Sequence_Customers;
 
-// Meta data
+// ---- meta data ----
 double Costs[1000];
 double Over_Capacities[1000];
 double Over_Energies[1000];
@@ -67,7 +68,9 @@ void create_space_mem()
   B_ENERGY = (double **)malloc(1000 * sizeof(double *));
 
   Routes = (int **)malloc(1000 * sizeof(int *));
+  Route_In_Pool = (int **)malloc(700 * sizeof(int *));
   Through_Stations = (bool **)malloc(1000 * sizeof(bool *));
+  Through_Stations_In_Pool = (bool **)malloc(700 * sizeof(bool *));
 
   for (i = 0; i < DIMENTION; i++)
   {
@@ -88,6 +91,9 @@ void create_space_mem()
     B_ENERGY[i] = (double *)malloc(NUM_CUSTOMERS * sizeof(double));
     Routes[i] = (int *)malloc((NUM_CUSTOMERS + NUM_VEHICLES + 1) * sizeof(int));
     Through_Stations[i] = (bool *)malloc((NUM_CUSTOMERS + NUM_VEHICLES) * sizeof(bool));
+    Through_Stations_In_Pool[i] = (bool *)malloc((NUM_CUSTOMERS + NUM_VEHICLES) * sizeof(bool));
+    if (i < 700)
+      Route_In_Pool[i] = (int *)malloc((NUM_CUSTOMERS + NUM_VEHICLES + 1) * sizeof(int));
   }
 }
 
@@ -117,7 +123,7 @@ void read_file(char *file_src)
   NUM_CUSTOMERS = DIMENTION;
   DIMENTION = NUM_CUSTOMERS + NUM_STATIONS;
 
-  printf("data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES);
+  printf("data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d - num_station: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES, NUM_STATIONS);
   create_space_mem();
 
   double index, x, y;
@@ -187,14 +193,6 @@ void prepare_data()
       find_best_stations(i, j);
     }
   }
-
-  // for (int i = 0; i < DIMENTION; i++)
-  // {
-  //   for (int j = i + 1; j < DIMENTION; j++)
-  //   {
-  //     printf("D(%d, %d) = %lf\n", i, j, Distances[i][j]);
-  //   }
-  // }
 }
 
 double dist_consum(double distance)
@@ -268,11 +266,11 @@ void init_population()
 
     Routes[i][0] = 0;
 
-    rand_through = (int)(rand() % 2);
-    if (rand_through == 0)
-      Through_Stations[i][NUM_CUSTOMERS] = false;
-    else
-      Through_Stations[i][NUM_CUSTOMERS] = true;
+    // rand_through = (int)(rand() % 2);
+    // if (rand_through == 0)
+    //   Through_Stations[i][NUM_CUSTOMERS] = false;
+    // else
+    //   Through_Stations[i][NUM_CUSTOMERS] = true;
   }
 
   // for (i = 0; i < 1000; i++)
@@ -280,7 +278,14 @@ void init_population()
   //   printf("\n");
   //   for (j = 1; j < NUM_CUSTOMERS + NUM_VEHICLES + 1; j++)
   //   {
-  //     printf("%d ", Routes[i][j]);
+  //     if (Routes[i][j] < NUM_CUSTOMERS)
+  //     {
+  //       printf("%d ", Routes[i][j]);
+  //     }
+  //     else
+  //     {
+  //       printf(" || ");
+  //     }
   //   }
   //   printf("\n");
   //   for (j = 1; j < NUM_CUSTOMERS; j++)
@@ -295,22 +300,29 @@ void init_population()
 double compute_over_capacity(int index)
 {
   int i;
-  int begin_route_num = NUM_CUSTOMERS;  // fixed_v1.1
-  double sum_capacity = 0.0;
-  for (i = 1; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
+  int begin_route_num = NUM_CUSTOMERS;
+  double sum_capacity_over = 0.0;
+  double sum_capacity_route = 0.0;
+  for (i = 1; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
   {
     int node = Routes[index][i];
     if (node < begin_route_num)
     {
-      sum_capacity += Demands[node];
+      sum_capacity_route += Demands[node];
+    }
+    else
+    {
+      int temp_over = MAX_CAPACITY_VH - sum_capacity_route;
+      sum_capacity_route = 0.0;
+      if (temp_over < 0)
+        sum_capacity_over += temp_over;
     }
   }
 
-  double over_capacity = MAX_CAPACITY_VH - sum_capacity;
-  if (over_capacity < 0.0)
+  if (sum_capacity_over < 0.0)
   {
     Is_Feasible[index] = false;
-    return -over_capacity;
+    return -sum_capacity_over;
   }
   else
   {
@@ -324,9 +336,6 @@ double compute_cost_route(int index)
   int i;
   int begin_route_num = NUM_CUSTOMERS;
   double route_cost = 0.0;
-  // // begin
-  // int begin_node = Routes[index][1];
-  // //
   for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
   {
     // current node
@@ -337,7 +346,7 @@ double compute_cost_route(int index)
     int next_node = Routes[index][i + 1];
     if (next_node >= begin_route_num)
       next_node = 0;
-
+    // BEGIN
     if (node != next_node)
     {
       if (Through_Stations[index][i])
@@ -349,46 +358,6 @@ double compute_cost_route(int index)
         route_cost += Distances[node][next_node];
     }
   }
-
-  return route_cost;
-}
-
-double compute_cost_route_debug(int index)
-{
-  int i;
-  int begin_route_num = NUM_CUSTOMERS;
-  double route_cost = 0.0;
-  // // begin
-  // int begin_node = Routes[index][1];
-  // //
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
-  {
-    // current node
-    int node = Routes[index][i];
-    if (node >= begin_route_num)
-      node = 0;
-    // next node
-    int next_node = Routes[index][i + 1];
-    if (next_node >= begin_route_num)
-      next_node = 0;
-
-    if (node != next_node)
-    {
-      if (Through_Stations[index][i])
-      {
-        double best_stat_distance = Best_Station_Distances[node][next_node];
-        printf("\ncost(%d, %d): %0.3lf - %0.3lf", node, next_node, route_cost, best_stat_distance);
-        route_cost += best_stat_distance;
-      }
-      else
-      {
-        printf("\ncost(%d, %d): %0.3lf - %0.3lf", node, next_node, route_cost, Distances[node][next_node]);
-        route_cost += Distances[node][next_node];
-      }
-    }
-  }
-
-  printf("\nfinal: %0.3lf", route_cost);
 
   return route_cost;
 }
@@ -396,74 +365,64 @@ double compute_cost_route_debug(int index)
 double compute_over_energy(int index)
 {
   int i;
-  bool is_feasible = true;
   int begin_route_num = NUM_CUSTOMERS;
-  double remain_energy = MAX_ENERGY_VH;
+  bool is_feasible = true;
+
+  double remain_eng = MAX_ENERGY_VH;
+  double sum_distance = 0.0;
+
+  double over_eng = 0.0;
+
   for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
   {
     // current node
     int node = Routes[index][i];
     if (node >= begin_route_num)
       node = 0;
+
     // next node
     int next_node = Routes[index][i + 1];
     if (next_node >= begin_route_num)
       next_node = 0;
 
-    if (is_feasible)
+    // BEGIN
+    if (Through_Stations[index][i])
     {
-      if (node != next_node)
+      double temp_over_eng = remain_eng - dist_consum(sum_distance + Distances[Best_Stations[node][next_node]][node]);
+      if (temp_over_eng < 0)
       {
-        if (Through_Stations[index][i])
+        is_feasible = false;
+        over_eng -= abs(temp_over_eng);
+      }
+      else
+      {
+        if (!is_feasible)
         {
-          int best_stat = Best_Stations[node][next_node];
-          double eng_stat = remain_energy - dist_consum(Distances[node][best_stat]);
-          if (eng_stat < 0)
-          {
-            is_feasible = false;
-            remain_energy = MAX_ENERGY_VH + eng_stat - dist_consum(Distances[best_stat][next_node]);
-            if(remain_energy < 0) is_feasible = false;
-          }
-          else
-          {
-            remain_energy = MAX_ENERGY_VH - dist_consum(Distances[best_stat][next_node]);
-            if(remain_energy < 0) is_feasible = false;
-          }
-        }
-        else
-        {
-          remain_energy -= dist_consum(Distances[node][next_node]);
-          if(remain_energy < 0) is_feasible = false;
+          over_eng -= abs(temp_over_eng);
         }
       }
-    } else {
-      if (node != next_node)
-      {
-        if (Through_Stations[index][i])
-        {
-          int best_stat = Best_Stations[node][next_node];
-          remain_energy -= dist_consum(Best_Station_Distances[node][next_node]);
-        } else
-        {
-          remain_energy -= dist_consum(Distances[node][next_node]);
-        }
-      }
+
+      remain_eng = MAX_ENERGY_VH - dist_consum(Distances[Best_Stations[node][next_node]][next_node]);
+      sum_distance = 0.0;
+    }
+    else
+    {
+      sum_distance += Distances[node][next_node];
+    }
+
+    if (next_node == 0)
+    {
+      if (remain_eng < 0)
+        remain_eng = MAX_ENERGY_VH + remain_eng;
+      else
+        remain_eng = MAX_ENERGY_VH;
     }
   }
 
-  if (is_feasible)
-  {
-    Is_Feasible[index] = true;
-    return 0.0;
-  }
-  else
-  {
+  if (!is_feasible)
     Is_Feasible[index] = false;
-    if (abs(remain_energy) < 10.0)
-      return MAX_ENERGY_VH;
-    else
-      return abs(remain_energy);
-  }
+
+  return abs(over_eng);
 }
 
 /* ==== compute_H_value =====  */
@@ -543,18 +502,13 @@ void compute_meta_data()
   double AVG_e = compute_AVG_e();
   double alpha = H * (AVG_q / (AVG_q * AVG_q + AVG_e * AVG_e));
   double beta = H * (AVG_e / (AVG_q * AVG_q + AVG_e * AVG_e));
-  //double fitness_val = cost + alpha * over_capacity + beta * over_energy;
 
+  //double fitness_val = cost + alpha * over_capacity + beta * over_energy;
   for (i = 0; i < 1000; i++)
   {
     double fitness_val = Costs[i] + alpha * Over_Capacities[i] + beta * Over_Energies[i];
     Fitness[i] = fitness_val;
   }
-
-  // for (i = 0; i < 1000; i++)
-  // {
-  //   printf(" %0.3lf - cost: %lf - is_feasible: %d\n", Fitness[i], Costs[i], Is_Feasible[i]);
-  // }
 }
 
 // call after Fitness compute
@@ -596,12 +550,6 @@ void bubble_sort()
 
 void build_Roulette_wheel_arr()
 {
-  // int i;
-  // Roulette_Wheel_Arr[0] = Fitness[0];
-  // for (i = 1; i < 1000; i++)
-  // {
-  //   Roulette_Wheel_Arr[i] = Roulette_Wheel_Arr[i - 1] + Fitness[i];
-  // }
   int i;
   bubble_sort();
   Roulette_Wheel_Arr[0] = virtual_fitness[0];
@@ -620,13 +568,15 @@ void reset_in_pool()
     Is_In_Pool[i] = false;
   }
 }
+
 void select_parent_to_pool_distinct()
 {
   reset_in_pool();
   int i, j, m;
   int total = (int)Roulette_Wheel_Arr[999];
   srand((unsigned)time(NULL));
-  for (i = 0; i < 500; i++)
+  // select 700 parent into pool
+  for (i = 0; i < 700; i++)
   {
     int rand_wheel = (int)(rand() % total);
     for (j = 0; j < 1000; j++)
@@ -655,11 +605,6 @@ void select_parent_to_pool_distinct()
       }
     }
   }
-
-  // for (i = 0; i < 500; i++)
-  // {
-  //   printf("pool: %d\n", Parent_Pool[i]);
-  // }
 }
 
 void select_parent_to_pool_no_distinct()
@@ -667,7 +612,7 @@ void select_parent_to_pool_no_distinct()
   int i, j, k = 0, m;
   int total = (int)Roulette_Wheel_Arr[999];
   srand((unsigned)time(NULL));
-  for (i = 0; i < 500; i++)
+  for (i = 0; i < 700; i++)
   {
     int rand_wheel = (int)(rand() % total);
     for (j = 0; j < 1000; j++)
@@ -681,11 +626,6 @@ void select_parent_to_pool_no_distinct()
       }
     }
   }
-
-  // for (i = 0; i < 500; i++)
-  // {
-  //   printf("pool: %d\n", Parent_Pool[i]);
-  // }
 }
 
 // run after created pool
@@ -726,6 +666,239 @@ void compute_new_meta_data()
   }
 }
 
+void compute_is_throught_station()
+{
+}
+
+double compute_cost_route_temp(int *route)
+{
+  int i;
+  double route_cost = 0.0;
+  int begin_route_num = NUM_CUSTOMERS;
+  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
+  {
+    int node = route[i];
+    if (node >= begin_route_num)
+      node = 0;
+    int next_node = route[i + 1];
+    if (next_node >= begin_route_num)
+      next_node = 0;
+
+    if (node != next_node)
+    {
+      route_cost += Distances[node][next_node];
+    }
+  }
+
+  return route_cost;
+}
+
+int Best_ExChange[200];
+void Two_Exchange_CrossOver(int index)
+{
+  int begin_route_num = NUM_CUSTOMERS;
+  //int Best_ExChange[NUM_CUSTOMERS + NUM_VEHICLES + 1];
+  // reset best_exchange
+  int s, begin = 0, end = 0, i, j;
+  int parent[NUM_CUSTOMERS + NUM_VEHICLES + 1];
+  // capy data of parent
+  for (s = 0; s < NUM_CUSTOMERS + NUM_VEHICLES + 1; s++)
+  {
+    parent[s] = Routes[index][s];
+    Best_ExChange[s] = Routes[index][s];
+  }
+  double best_cost = compute_cost_route_temp(parent);
+  while (true && parent[begin] < (NUM_CUSTOMERS + NUM_VEHICLES))
+  {
+    // find end route
+    begin = end + 1;
+    // find begin
+    while (parent[begin] >= begin_route_num)
+    {
+      begin++;
+    }
+    end = begin + 1;
+    while (parent[end] < NUM_CUSTOMERS)
+    {
+      end++;
+    }
+
+    if ((parent[begin] > NUM_CUSTOMERS + NUM_VEHICLES) || (parent[end] > NUM_CUSTOMERS + NUM_VEHICLES))
+      break;
+    // BEGIN
+    for (i = begin; i < end - 2; i++)
+    {
+      for (j = i + 2; j < end - 1; j++)
+      {
+        int i_1 = i + 1;
+        int j_1 = j + 1;
+        int temp = parent[i_1];
+        parent[i_1] = parent[j];
+        parent[j] = temp;
+        double route_cost = compute_cost_route_temp(parent);
+        //printf("route_cost__(%0.3f, %0.3f)", best_cost, route_cost);
+        if (route_cost < best_cost)
+        {
+          //printf("\nnew_best_route__ %0.3lf\n", route_cost);
+          best_cost = route_cost;
+          // copy to best_route
+          for (int t = 0; t < NUM_CUSTOMERS + NUM_VEHICLES + 1; t++)
+          {
+            Best_ExChange[t] = parent[t];
+          }
+        }
+        // put data back
+        temp = parent[i_1];
+        parent[i_1] = parent[j];
+        parent[j] = temp;
+      }
+    }
+
+    //END
+    // end 2_exchange
+    if (end == NUM_CUSTOMERS + NUM_VEHICLES)
+      break;
+  }
+}
+
+void Or_Exchange()
+{
+}
+
+int Best_Route_Education[200];
+bool Best_Route_Through_Edu[200];
+void set_init_best(int *route)
+{
+  int i;
+  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
+  {
+    Best_Route_Education[i] = route[i];
+    Best_Route_Through_Edu[i] = false;
+  }
+}
+
+void exchange_education(int *route)
+{
+  int begin_route_num = NUM_CUSTOMERS;
+  int s, begin = 0, end = 0, i, j;
+  int parent[NUM_CUSTOMERS + NUM_VEHICLES + 1];
+
+  for (s = 0; s < NUM_CUSTOMERS + NUM_VEHICLES + 1; s++)
+  {
+    parent[s] = route[s];
+  }
+  double best_cost = compute_cost_route_temp(parent);
+  while (true && parent[begin] < (NUM_CUSTOMERS + NUM_VEHICLES))
+  {
+    begin = end + 1;
+    while (parent[begin] >= begin_route_num)
+    {
+      begin++;
+    }
+    end = begin + 1;
+    while (parent[end] < NUM_CUSTOMERS)
+    {
+      end++;
+    }
+
+    if ((parent[begin] > NUM_CUSTOMERS + NUM_VEHICLES) || (parent[end] > NUM_CUSTOMERS + NUM_VEHICLES))
+      break;
+
+    for (i = begin; i < end - 2; i++)
+    {
+      for (j = i + 2; j < end - 1; j++)
+      {
+        int i_1 = i + 1;
+        int j_1 = j + 1;
+        int temp = parent[i_1];
+        parent[i_1] = parent[j];
+        parent[j] = temp;
+        double route_cost = compute_cost_route_temp(parent);
+
+        if (route_cost < best_cost)
+        {
+          printf("\nnew_best_route__ %0.3lf\n", route_cost);
+          best_cost = route_cost;
+          for (int t = 0; t < NUM_CUSTOMERS + NUM_VEHICLES + 1; t++)
+          {
+            Best_Route_Education[t] = parent[t];
+          }
+        }
+        temp = parent[i_1];
+        parent[i_1] = parent[j];
+        parent[j] = temp;
+      }
+    }
+
+    if (end == NUM_CUSTOMERS + NUM_VEHICLES)
+      break;
+  }
+}
+
+void find_through_station()
+{
+  int i, j;
+  int first_route_num = NUM_CUSTOMERS;
+  double available_eng = MAX_ENERGY_VH;
+  bool is_feasible = true;
+  for (j = 0; j < NUM_CUSTOMERS + NUM_VEHICLES; j++)
+  {
+    int node = Best_Route_Education[j];
+    if (node >= first_route_num)
+      node = 0;
+    int next_node = Best_Route_Education[j + 1];
+    if (next_node >= first_route_num)
+      next_node = 0;
+    if (node == 0 || node >= first_route_num)
+    {
+      available_eng = MAX_ENERGY_VH;
+    }
+
+    if (node != next_node)
+    {
+      if (is_feasible)
+      {
+        if (available_eng > dist_consum(Distances[node][next_node]))
+        {
+          available_eng -= dist_consum(Distances[node][next_node]);
+          Best_Route_Through_Edu[j] = false;
+          if (available_eng < 0)
+            is_feasible = false;
+        }
+        else
+        {
+          int best_stat = Best_Stations[node][next_node];
+          if (available_eng > dist_consum(Distances[best_stat][node]) && MAX_ENERGY_VH > dist_consum(Distances[best_stat][next_node]))
+          {
+            available_eng = MAX_ENERGY_VH - dist_consum(Distances[best_stat][next_node]);
+            if (available_eng < 0)
+              is_feasible = false;
+            Best_Route_Through_Edu[j] = true;
+          }
+        }
+      }
+      else
+      {
+        Best_Route_Through_Edu[j] = false;
+      }
+    }
+  }
+
+  // printf("\nThrought_Stat: ");
+  // for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
+  // {
+  //   printf("%d ", Best_Route_Through_Edu[i]);
+  // }
+}
+
+void Education(int *route)
+{
+  set_init_best(route);
+  exchange_education(route);
+  find_through_station();
+}
+
+bool is_process[300];
 void Permutation_order_1()
 {
   // create child 1 and 2 space
@@ -739,31 +912,30 @@ void Permutation_order_1()
   child_1[0] = 0;
   child_2[0] = 0;
 
-
   int seq_choosen[num];
-
   for (i = 0; i < num; i++)
     seq_choosen[i] = i;
 
-  //reset_deprecate_data();
   srand((unsigned)time(NULL));
-  for (int s = 0; s < 500 / 2; s++)
+  int count_pool = -1;
+  //Through_Stations_In_Pool
+  for (int s = 0; s < 700 / 2; s++)
   {
     // select parent
-    int parent_1 = (int)(rand() % (500 - s * 2));
+    int parent_1 = (int)(rand() % (700 - s * 2));
     int temp = Parent_Pool[parent_1];
-    Parent_Pool[parent_1] = Parent_Pool[499 - s * 2];
-    Parent_Pool[499 - s * 2] = temp;
-    parent_1 = Parent_Pool[499 - s * 2];
+    Parent_Pool[parent_1] = Parent_Pool[699 - s * 2];
+    Parent_Pool[699 - s * 2] = temp;
+    parent_1 = Parent_Pool[699 - s * 2];
 
-    int parent_2 = (int)(rand() % (500 - s * 2 - 1));
+    int parent_2 = (int)(rand() % (700 - s * 2 - 1));
     temp = Parent_Pool[parent_2];
-    Parent_Pool[parent_2] = Parent_Pool[499 - s * 2 - 1];
-    Parent_Pool[499 - s * 2 - 1] = temp;
-    parent_2 = Parent_Pool[499 - s * 2 - 1];
+    Parent_Pool[parent_2] = Parent_Pool[699 - s * 2 - 1];
+    Parent_Pool[699 - s * 2 - 1] = temp;
+    parent_2 = Parent_Pool[699 - s * 2 - 1];
 
     // in permutation
-    // child 1
+    // CHILD 1
     begin_rand = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 1)) + 1;
     temp = seq_choosen[begin_rand];
     seq_choosen[begin_rand] = seq_choosen[NUM_CUSTOMERS + NUM_VEHICLES - 1];
@@ -814,112 +986,97 @@ void Permutation_order_1()
         }
       }
     }
+
     child_1[NUM_CUSTOMERS + NUM_VEHICLES] = 0;
 
-    // child 2
+    // CHILD 2
+    int rand_choose_parent = (int)(rand() % 2);
+    int select_parent = parent_1;
+    if (rand_choose_parent == 1)
+      select_parent = parent_2;
+
+    // this is child 2 in Best_ExChange
+    Two_Exchange_CrossOver(select_parent);
     for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
-      seq_choosen[i] = i;
-    begin_rand = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 1)) + 1;
-    temp = seq_choosen[begin_rand];
-    seq_choosen[begin_rand] = seq_choosen[NUM_CUSTOMERS + NUM_CUSTOMERS - 1];
-    seq_choosen[NUM_CUSTOMERS + NUM_CUSTOMERS - 1] = temp;
-    begin_rand = seq_choosen[NUM_CUSTOMERS + NUM_CUSTOMERS - 1];
-
-    end_rand = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 2)) + 1;
-    temp = seq_choosen[end_rand];
-    seq_choosen[end_rand] = seq_choosen[NUM_CUSTOMERS + NUM_CUSTOMERS - 2];
-    seq_choosen[NUM_CUSTOMERS + NUM_CUSTOMERS - 2] = temp;
-    end_rand = seq_choosen[NUM_CUSTOMERS + NUM_CUSTOMERS - 2];
-
-    if (begin_rand > end_rand)
     {
-      temp = begin_rand;
-      begin_rand = end_rand;
-      end_rand = temp;
+      child_2[i] = Best_ExChange[i];
     }
-
-    for (i = begin_rand; i <= end_rand; i++)
+    // education
+    Education(child_1);
+    count_pool++;
+    for (int k = 0; k < NUM_CUSTOMERS + NUM_VEHICLES + 1; k++)
     {
-      child_2[i] = Routes[parent_2][i];
-    }
-
-    j = 1;
-    for (i = 1; i < begin_rand; i++)
-    {
-      for (; j < NUM_CUSTOMERS + NUM_VEHICLES; j++)
+      Route_In_Pool[count_pool][k] = Best_Route_Education[k];
+      if (k < NUM_CUSTOMERS + NUM_VEHICLES)
       {
-        if (!check_selected_customer(parent_2, begin_rand, end_rand, Routes[parent_1][j]))
+        Through_Stations_In_Pool[count_pool][k] = Best_Route_Through_Edu[k];
+      }
+    }
+    Education(child_2);
+    count_pool++;
+    for (int k = 0; k < NUM_CUSTOMERS + NUM_VEHICLES + 1; k++)
+    {
+      Route_In_Pool[count_pool][k] = Best_Route_Education[k];
+      if (k < NUM_CUSTOMERS + NUM_VEHICLES)
+      {
+        Through_Stations_In_Pool[count_pool][k] = Best_Route_Through_Edu[k];
+      }
+    }
+    // mutation for child 2
+  }
+
+  // for (int s = 0; s < 700; s++)
+  // {
+  //   printf("\nroute %d: ", s);
+  //   for (int n = 0; n < NUM_CUSTOMERS + NUM_VEHICLES + 1; n++)
+  //   {
+  //     printf("%d ", Route_In_Pool[s][n]);
+  //   }
+  // }
+
+  for (int s = 0; s < 300; s++)
+  {
+    is_process[s] = false;
+    int index = vitual_index[s];
+    if (index < 300)
+      is_process[index] = true;
+  }
+
+  for (int s = 0; s < 300; s++)
+  {
+    int index = vitual_index[s];
+    if (index > 300)
+    {
+      for (int k = 0; k < 300; k++)
+      {
+        if (!is_process[k])
         {
-          child_2[i] = Routes[parent_1][j];
-          j++;
+          for (int m = 0; m < NUM_CUSTOMERS + NUM_VEHICLES; m++)
+          {
+            Routes[k][m] = Routes[index][m];
+            if (m < NUM_CUSTOMERS + NUM_VEHICLES)
+            {
+              Through_Stations[k][m] = Through_Stations[index][m];
+            }
+          }
           break;
         }
       }
     }
+  }
 
-    for (i = end_rand + 1; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
+  int count = -1;
+  for (int s = 300; s < 1000; s++)
+  {
+    count++;
+    for (int m = 0; m < NUM_CUSTOMERS + NUM_VEHICLES + 1; m++)
     {
-      for (; j < NUM_CUSTOMERS + NUM_VEHICLES; j++)
+      Routes[s][m] = Route_In_Pool[count][m];
+      if (m < NUM_CUSTOMERS + NUM_VEHICLES)
       {
-        if (!check_selected_customer(parent_2, begin_rand, end_rand, Routes[parent_1][j]))
-        {
-          child_2[i] = Routes[parent_1][j];
-          j++;
-          break;
-        }
+        Through_Stations[m] = Through_Stations_In_Pool[m];
       }
     }
-    child_2[NUM_CUSTOMERS + NUM_VEHICLES] = 0;
-
-    // mutation child 2
-
-    begin_rand = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 1)) + 1;
-    end_rand = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 2)) + 1;
-    temp = child_2[begin_rand];
-    child_2[begin_rand] = child_2[end_rand];
-    child_2[end_rand] = temp;
-
-    // // produce new population
-    //Routes[parent_1] = child_1;
-    for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-    {
-      Routes[parent_1][i] = child_1[i];
-    }
-    // permutation for Thought Station child 1
-    int point = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 1)) + 1;
-    for (i = point; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
-    {
-      Through_Stations[parent_1][i] = Through_Stations[parent_2][i];
-    }
-    double cost = compute_cost_route(parent_1);
-    double over_capacity = compute_over_capacity(parent_1);
-    double over_energy = compute_over_energy(parent_1);
-
-    Costs[parent_1] = cost;
-    Over_Capacities[parent_1] = over_capacity;
-    Over_Energies[parent_1] = over_energy;
-
-    //Routes[parent_2] = child_2;
-    for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES; i++)
-    {
-      Routes[parent_2][i] = child_2[i];
-    }
-    // permutation for Thought Station child 2
-    point = (int)(rand() % (NUM_CUSTOMERS + NUM_VEHICLES - 1)) + 1;
-    for (i = 0; i < point; i++)
-    {
-      Through_Stations[parent_2][i] = Through_Stations[parent_1][i];
-    }
-    cost = compute_cost_route(parent_2);
-    over_capacity = compute_over_capacity(parent_2);
-    over_energy = compute_over_energy(parent_2);
-
-    Costs[parent_2] = cost;
-    Over_Capacities[parent_2] = over_capacity;
-    Over_Energies[parent_2] = over_energy;
-
-    //compute new meta data
-    compute_new_meta_data();
   }
 }
 
@@ -971,12 +1128,8 @@ void tune_result()
 
 int main()
 {
-  FILE *fp;
-  fp = fopen("./result.txt", "a");
-  fprintf(fp, "\n============================================================================\n");
   int i;
   read_file("E-n30-k3.evrp");
-  fprintf(fp, "\n\n-->data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES);
   prepare_data();
   init_population();
   compute_meta_data();
@@ -986,9 +1139,9 @@ int main()
     build_Roulette_wheel_arr();
     select_parent_to_pool_distinct();
     Permutation_order_1();
+    compute_meta_data();
     tune_result();
   }
-  //tune_result();
 
   int best_route = 0;
   double best_cost = Costs[0];
@@ -999,147 +1152,17 @@ int main()
       best_cost = Costs[i];
       best_route = i;
     }
-    // printf(" %0.3lf - cost: %lf - is_feasible: %d\n", Fitness[i], Costs[i], Is_Feasible[i]);
   }
 
-  fprintf(fp, "\n");
+  printf("\nBEST ROUTE FOUND: %d - Cost: %0.3lf - optimal: %.3lf", best_route, best_cost, OPTIMAL_VALUE);
+  printf("\n");
   for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
   {
-    fprintf(fp, "%d -> ", Routes[best_route][i]);
+    printf("%d -> ", Routes[best_route][i]);
   }
   printf("\n");
   for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
   {
-    fprintf(fp, "%d -> ", Through_Stations[best_route][i]);
+    printf("%d -> ", Through_Stations[best_route][i]);
   }
-
-  fprintf(fp, "\nBEST ROUTE FOUND: %d - Cost: %0.3lf - optimal: %.3lf", best_route, best_cost, OPTIMAL_VALUE);
-  //compute_cost_route_debug(best_route);
-
-  //////////////////////////////////////////////////////////////////////////////
-  read_file("E-n23-k3.evrp");
-  fprintf(fp, "\n\n-->data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES);
-  prepare_data();
-  init_population();
-  compute_meta_data();
-
-  for (i = 0; i < 1000; i++)
-  {
-    build_Roulette_wheel_arr();
-    select_parent_to_pool_distinct();
-    Permutation_order_1();
-    tune_result();
-  }
-  //tune_result();
-
-  best_route = 0;
-  best_cost = Costs[0];
-  for (i = 0; i < 1000; i++)
-  {
-    if (best_cost > Costs[i])
-    {
-      best_cost = Costs[i];
-      best_route = i;
-    }
-    // printf(" %0.3lf - cost: %lf - is_feasible: %d\n", Fitness[i], Costs[i], Is_Feasible[i]);
-  }
-
-  fprintf(fp, "\n");
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-  {
-    fprintf(fp, "%d -> ", Routes[best_route][i]);
-  }
-  fprintf(fp, "\n");
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-  {
-    fprintf(fp, "%d -> ", Through_Stations[best_route][i]);
-  }
-
-  fprintf(fp, "\nBEST ROUTE FOUND: %d - Cost: %0.3lf - optimal: %0.3lf", best_route, best_cost, OPTIMAL_VALUE);
-
-  ////////////////////////////////////////////////////////////////////////////////
-  read_file("E-n76-k7.evrp");
-  fprintf(fp, "\n\n-->data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES);
-  prepare_data();
-  init_population();
-  compute_meta_data();
-
-  for (i = 0; i < 1000; i++)
-  {
-    build_Roulette_wheel_arr();
-    select_parent_to_pool_distinct();
-    Permutation_order_1();
-    tune_result();
-  }
-  //tune_result();
-
-  best_route = 0;
-  best_cost = Costs[0];
-  for (i = 0; i < 1000; i++)
-  {
-    if (best_cost > Costs[i])
-    {
-      best_cost = Costs[i];
-      best_route = i;
-    }
-    // printf(" %0.3lf - cost: %lf - is_feasible: %d\n", Fitness[i], Costs[i], Is_Feasible[i]);
-  }
-
-  fprintf(fp, "\n");
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-  {
-    fprintf(fp, "%d -> ", Routes[best_route][i]);
-  }
-  fprintf(fp, "\n");
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-  {
-    fprintf(fp, "%d -> ", Through_Stations[best_route][i]);
-  }
-
-  fprintf(fp, "\nBEST ROUTE FOUND: %d - Cost: %0.3lf - optimal: %0.3lf", best_route, best_cost, OPTIMAL_VALUE);
-
-  ////////////////////////////////////////////////////////////////////////////////
-
-  read_file("E-n22-k4.evrp");
-  fprintf(fp, "\n\n-->data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES);
-  prepare_data();
-  init_population();
-  compute_meta_data();
-
-  for (i = 0; i < 1000; i++)
-  {
-    build_Roulette_wheel_arr();
-    select_parent_to_pool_distinct();
-    Permutation_order_1();
-    tune_result();
-  }
-
-  best_route = 0;
-  best_cost = Costs[0];
-  for (i = 0; i < 1000; i++)
-  {
-    if (best_cost > Costs[i])
-    {
-      best_cost = Costs[i];
-      best_route = i;
-    }
-    // printf(" %0.3lf - cost: %lf - is_feasible: %d\n", Fitness[i], Costs[i], Is_Feasible[i]);
-  }
-
-  fprintf(fp, "\n");
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-  {
-    fprintf(fp, "%d -> ", Routes[best_route][i]);
-  }
-  fprintf(fp, "\n");
-  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
-  {
-    fprintf(fp, "%d -> ", Through_Stations[best_route][i]);
-  }
-
-  fprintf(fp, "\nBEST ROUTE FOUND: %d - Cost: %0.3lf - optimal: %0.3lf", best_route, best_cost, OPTIMAL_VALUE);
-
-  fclose(fp);
-
-  return -1;
 }
