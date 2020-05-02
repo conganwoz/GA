@@ -6,7 +6,11 @@
 #include <math.h>
 #include <ctype.h>
 #include <time.h>
+#include <chrono>
+#include <iostream>
 
+//using namespace std;
+using namespace std::chrono;
 using namespace std;
 
 // -- data problem --
@@ -817,7 +821,7 @@ void exchange_education(int *route)
 
         if (route_cost < best_cost)
         {
-          printf("\nnew_best_route__ %0.3lf\n", route_cost);
+          //printf("\nnew_best_route__ %0.3lf\n", route_cost);
           best_cost = route_cost;
           for (int t = 0; t < NUM_CUSTOMERS + NUM_VEHICLES + 1; t++)
           {
@@ -1128,8 +1132,17 @@ void tune_result()
 
 int main()
 {
+  auto start = high_resolution_clock::now();
+
+
+
+  FILE *fp;
+  fp = fopen("./result.txt", "a");
+  //fprintf(fp, "\n--------------------------------------------------------------------------------\n");
   int i;
-  read_file("E-n30-k3.evrp");
+  read_file("E-n101-k8.evrp");
+  fprintf(fp, "\n============================================================================\n");
+  fprintf(fp, "\n\n-->data: dimention: %d - num_customer: %d - capacity_vh: %lf - energy_vh: %lf - energy_consumtion: %lf - num_vehicles: %d\n", DIMENTION, NUM_CUSTOMERS, MAX_CAPACITY_VH, MAX_ENERGY_VH, ENG_CONSUMTION, NUM_VEHICLES);
   prepare_data();
   init_population();
   compute_meta_data();
@@ -1139,8 +1152,8 @@ int main()
     build_Roulette_wheel_arr();
     select_parent_to_pool_distinct();
     Permutation_order_1();
-    compute_meta_data();
     tune_result();
+    compute_meta_data();
   }
 
   int best_route = 0;
@@ -1165,4 +1178,22 @@ int main()
   {
     printf("%d -> ", Through_Stations[best_route][i]);
   }
+
+  fprintf(fp, "\nLần 6: BEST ROUTE FOUND: %d - Cost: %0.3lf - optimal: %.3lf", best_route, best_cost, OPTIMAL_VALUE);
+  fprintf(fp, "\nRoute: ");
+  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
+  {
+    fprintf(fp, "%d -> ", Routes[best_route][i]);
+  }
+  fprintf(fp, "\nThrought_station: ");
+  for (i = 0; i < NUM_CUSTOMERS + NUM_VEHICLES + 1; i++)
+  {
+    fprintf(fp, "%d -> ", Through_Stations[best_route][i]);
+  }
+  auto stop = high_resolution_clock::now();
+  auto duration = duration_cast<microseconds>(stop - start);
+  cout << "\nTime taken by function: "
+         << duration.count()/1000 << " milliseconds" << endl;
+  fprintf(fp,"\ntime_run: %llu milliseconds", duration.count()/1000);
+  fclose(fp);
 }
